@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { User } from "../model/userModel";
+import { generateRefreshToken } from "../config/refreshToken";
+import { generateToken } from "../config/jwtToken";
 
 export const signUp = async (req: Request, res: Response) => {
   try {
@@ -34,7 +36,35 @@ export const signUp = async (req: Request, res: Response) => {
 };
 
 export const login = async (req: Request, res: Response) => {
-  // Your login logic here
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email }).select('+password');
+    if (
+      user &&
+      (await (user as any).isPasswordMatched(password, user.password))
+    ) {
+      const refreshToken = generateRefreshToken(user.id);
+      const updateUser = await User.findByIdAndUpdate(
+        user._id,
+        {
+          refreshToken: refreshToken,
+        },
+        { new: true }
+      );
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        maxAge: 72 * 60 * 60 * 1000,
+      });
+      return res.json({
+        _id: user._id,
+        token: generateToken(user.id),
+        status: "success",
+        user: user,
+      });
+    }
+  } catch (error) {
+    console.log(error);
+  }
 };
 
 export const forgotPassword = async (req: Request, res: Response) => {
