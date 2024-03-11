@@ -1,7 +1,9 @@
-import { Request, Response } from "express";
+import { Request, Response, NextFunction } from "express";
 import { User } from "../model/userModel";
 import { generateRefreshToken } from "../config/refreshToken";
 import { generateToken } from "../config/jwtToken";
+import asyncHandler from "../utils/asyncHandler";
+import AppError from "../utils/appError";
 
 export const signUp = async (req: Request, res: Response) => {
   try {
@@ -35,40 +37,90 @@ export const signUp = async (req: Request, res: Response) => {
   }
 };
 
-export const login = async (req: Request, res: Response) => {
-  try {
+export const login = asyncHandler(
+  async (req: Request, res: Response, next: NextFunction) => {
     const { email, password } = req.body;
-    const user = await User.findOne({ email }).select('+password');
-    if (
-      user &&
-      (await (user as any).isPasswordMatched(password, user.password))
-    ) {
-      const refreshToken = generateRefreshToken(user.id);
-      const updateUser = await User.findByIdAndUpdate(
-        user._id,
-        {
-          refreshToken: refreshToken,
-        },
-        { new: true }
+
+    // Check if email and password are provided
+    if (!email || !password) {
+      return next(
+        new AppError("Please provide a valid email and password", 400)
       );
-      res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        maxAge: 72 * 60 * 60 * 1000,
-      });
-      return res.json({
-        _id: user._id,
-        token: generateToken(user.id),
-        status: "success",
-        user: user,
-      });
     }
-  } catch (error) {
-    console.log(error);
+
+    // Find user by email
+    const user = await User.findOne({ email }).select("+password");
+
+    // Check if user exists and password is correct
+    if (
+      !user ||
+      !(await (user as any).isPasswordMatched(password, user.password))
+    ) {
+      return next(new AppError("Incorrect email or password", 401));
+    }
+
+    // Generate new refresh token
+    const refreshToken = generateRefreshToken(user.id);
+    // Update user with new refresh token
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      { refreshToken },
+      { new: true }
+    );
+
+    // Set refresh token in cookie
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      maxAge: 72 * 60 * 60 * 1000, // 72 hours
+    });
+
+    // Return success response with user details and token
+    return res.json({
+      _id: user._id,
+      token: generateToken(user.id),
+      status: "success",
+      user: updatedUser,
+    });
   }
-};
+);
 
-export const forgotPassword = async (req: Request, res: Response) => {
-  // Your forgot password logic here
-};
+// logout user
+const logout = asyncHandler(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const refreshToken = req.cookies.refreshToken;
+    console.log(refreshToken);
 
-export default { signUp, login, forgotPassword };
+    if (!refreshToken) {
+      return res.status(400).json({ error: "No Refresh Token in Cookie" });
+    }
+
+    try {
+      // Find user by refreshToken
+      const user = await User.findOneAndUpdate(
+        { refreshToken: refreshToken },
+        { $unset: { refreshToken: "" } },
+        { new: true }
+      ).catch((error) => {
+        console.error("Error updating user:", error);
+      });
+      
+console.log(user);
+      if (!user) {
+        return res
+          .clearCookie("refreshToken")
+          .json({ message: "User not found, but logout successful" });
+      }
+
+      return res
+        .clearCookie("refreshToken", {
+          httpOnly: true,
+          secure: true,
+        })
+        .json({ message: "Logout successful" });
+    } catch (error) {
+      return res.status(500).json({ error: "Something went wrong" });
+    }
+  }
+);
+
+export default { signUp, login, logout };

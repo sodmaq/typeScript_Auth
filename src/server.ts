@@ -1,5 +1,6 @@
+import express from "express";
 import mongoose from "mongoose";
-// import dotenv from "dotenv";
+import { app } from "./index";
 import { load } from "ts-dotenv";
 
 const env = load({
@@ -25,8 +26,6 @@ mongoose.connection.on("connected", () => {
 mongoose.connection.on("error", (error: Error) => {
   console.error("MongoDB connection error:", error);
 });
-import { app } from "./index";
-import { assert } from "console";
 
 // Start the Express server
 const port = env.PORT || 8000;
