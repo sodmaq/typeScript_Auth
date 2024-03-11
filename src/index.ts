@@ -25,14 +25,17 @@ app.use(bodyParser.json()); // Parse JSON bodies
 app.use(cookieParser());
 app.use(compression());
 
-// app.all("*", (req: Request, res: Response, next: NextFunction) => {
-//   next(new AppError(`Can't find ${req.originalUrl} on this server`, 404));
-// });
 
-// Error handling middleware
-app.use(globalErrorHandler);
+
+
 
 // Define route
 app.use("/api/user", authRoute);
+
+// Error handling middleware
+app.all("*", (req: Request, res: Response, next: NextFunction) => {
+  next(new AppError(`Can't find ${req.originalUrl} on this server`, 404));
+});
+app.use(globalErrorHandler);
 
 export { app };

@@ -88,8 +88,6 @@ export const login = asyncHandler(
 const logout = asyncHandler(
   async (req: Request, res: Response, next: NextFunction) => {
     const refreshToken = req.cookies.refreshToken;
-    console.log(refreshToken);
-
     if (!refreshToken) {
       return res.status(400).json({ error: "No Refresh Token in Cookie" });
     }
@@ -100,11 +98,7 @@ const logout = asyncHandler(
         { refreshToken: refreshToken },
         { $unset: { refreshToken: "" } },
         { new: true }
-      ).catch((error) => {
-        console.error("Error updating user:", error);
-      });
-      
-console.log(user);
+      );
       if (!user) {
         return res
           .clearCookie("refreshToken")
