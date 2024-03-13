@@ -111,6 +111,7 @@ export const login = asyncHandler(
         user: updatedUser,
       });
     } catch (error) {
+      
       return next(
         new AppError("Something went wrong, please try again later", 500)
       );
@@ -150,40 +151,30 @@ export const logout = asyncHandler(
   }
 );
 
-export const confirmEmail = asyncHandler(async (req, res, next) => {
-  const token = await Token.findOne({ token: req.params.token });
+export const confirmEmail = asyncHandler(async (req: Request, res: Response, next: any) => {
+  const tokenValue = req.params.token;
+  const userEmail = req.params.email;
+
+  const token = await Token.findOneAndDelete({ token: tokenValue });
 
   if (!token) {
-    return next(
-      new AppError(
-        "Your verification link may have expired. Please click on resend for verify your Email.",
-        400
-      )
-    );
+    return next(new AppError('Your verification link may have expired. Please click on resend for verify your Email.', 400));
   }
 
-  const user = await User.findOne({
-    _id: token._userId,
-    email: req.params.email,
-  });
+  const user = await User.findOne({ _id: token._userId, email: userEmail });
 
   if (!user) {
-    return next(
-      new AppError(
-        "We were unable to find a user for this verification. Please SignUp!",
-        401
-      )
-    );
+    return next(new AppError('We were unable to find a user for this verification. Please SignUp!', 404));
   }
 
   if (user.isVerified) {
-    return res.status(200).send("User has been already verified. Please Login");
+    return res.status(200).send('User has been already verified. Please Login');
   }
 
   user.isVerified = true;
   await user.save();
 
-  res.status(200).send("Your account has been successfully verified");
+  return res.status(200).send('Your account has been successfully verified');
 });
 
 export const resendLink = asyncHandler(
