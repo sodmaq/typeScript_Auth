@@ -1,41 +1,57 @@
 import { Request, Response, NextFunction } from "express";
 import { User } from "../model/userModel";
+import { Token } from "../model/tokenModel";
 import { generateRefreshToken } from "../config/refreshToken";
 import { generateToken } from "../config/jwtToken";
 import asyncHandler from "../utils/asyncHandler";
 import AppError from "../utils/appError";
+import crypto from "crypto";
+import { sendEmail } from "../utils/email";
 
-export const signUp = async (req: Request, res: Response) => {
-  try {
-    const { name, email, password } = req.body;
+export const signUp = asyncHandler(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { name, email, password } = req.body;
+      if (!name || !email || !password) {
+        return next(
+          new AppError("Please provide name, email, and password", 400)
+        );
+      }
+      // Check if user with provided email already exists
+      const existingUser = await User.findOne({ email });
 
-    if (!name || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Please provide name, email, and password" });
+      if (existingUser) {
+        return next(new AppError("User with this email already exists", 400));
+      }
+
+      // Create new user
+      const newUser = new User({ name, email, password });
+      await newUser.save();
+
+      // Generate and save token
+      const token = new Token({
+        _userId: newUser._id,
+        token: crypto.randomBytes(16).toString("hex"),
+      });
+      await token.save();
+
+      // Send verification email
+      const verificationText = `Hello ${newUser.name},\n\nPlease verify your account by clicking the link:\nhttp://${req.headers.host}/api/user/confirmation/${newUser.email}/${token.token}\n\nThank You!\n`;
+      await sendEmail(
+        newUser.email,
+        "Account Verification Link",
+        verificationText
+      );
+
+      res
+        .status(201)
+        .json({ message: "User created successfully", user: newUser });
+    } catch (error) {
+      console.error("Error in sign up:", error);
+      return next(new AppError("Internal Server Error", 500));
     }
-
-    // Check if user with provided email already exists
-    const existingUser = await User.findOne({ email });
-
-    if (existingUser) {
-      return res
-        .status(400)
-        .json({ error: "User with this email already exists" });
-    }
-
-    // Create new user
-    const newUser = new User({ name, email, password });
-    await newUser.save();
-
-    res
-      .status(201)
-      .json({ message: "User created successfully", user: newUser });
-  } catch (error) {
-    console.error("Error in sign up:", error);
-    res.status(500).json({ error: "Internal Server Error" });
   }
-};
+);
 
 export const login = asyncHandler(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -48,44 +64,61 @@ export const login = asyncHandler(
       );
     }
 
-    // Find user by email
-    const user = await User.findOne({ email }).select("+password");
+    try {
+      // Find user by email
+      const user = await User.findOne({ email }).select("+password");
 
-    // Check if user exists and password is correct
-    if (
-      !user ||
-      !(await (user as any).isPasswordMatched(password, user.password))
-    ) {
-      return next(new AppError("Incorrect email or password", 401));
+      // Check if user exists
+      if (!user) {
+        return next(new AppError("User not found", 404));
+      }
+
+      // Check if user is verified
+      if (!user.isVerified) {
+        return res.status(401).json({
+          msg: "Your email has not been verified. Please click on resend.",
+        });
+      }
+
+      // Check if password is correct
+      const isPasswordMatched = await (user as any).isPasswordMatched(password);
+
+      if (!isPasswordMatched) {
+        return next(new AppError("Incorrect email or password", 401));
+      }
+
+      // Generate new refresh token
+      const refreshToken = generateRefreshToken(user.id);
+
+      // Update user with new refresh token
+      const updatedUser = await User.findByIdAndUpdate(
+        user._id,
+        { refreshToken },
+        { new: true }
+      );
+
+      // Set refresh token in cookie
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        maxAge: 72 * 60 * 60 * 1000, // 72 hours
+      });
+
+      // Return success response with user details and token
+      return res.json({
+        _id: user._id,
+        token: generateToken(user.id),
+        status: "success",
+        user: updatedUser,
+      });
+    } catch (error) {
+      return next(
+        new AppError("Something went wrong, please try again later", 500)
+      );
     }
-
-    // Generate new refresh token
-    const refreshToken = generateRefreshToken(user.id);
-    // Update user with new refresh token
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
-      { refreshToken },
-      { new: true }
-    );
-
-    // Set refresh token in cookie
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      maxAge: 72 * 60 * 60 * 1000, // 72 hours
-    });
-
-    // Return success response with user details and token
-    return res.json({
-      _id: user._id,
-      token: generateToken(user.id),
-      status: "success",
-      user: updatedUser,
-    });
   }
 );
-
 // logout user
-const logout = asyncHandler(
+export const logout = asyncHandler(
   async (req: Request, res: Response, next: NextFunction) => {
     const refreshToken = req.cookies.refreshToken;
     if (!refreshToken) {
@@ -117,4 +150,85 @@ const logout = asyncHandler(
   }
 );
 
-export default { signUp, login, logout };
+export const confirmEmail = asyncHandler(async (req, res, next) => {
+  const token = await Token.findOne({ token: req.params.token });
+
+  if (!token) {
+    return next(
+      new AppError(
+        "Your verification link may have expired. Please click on resend for verify your Email.",
+        400
+      )
+    );
+  }
+
+  const user = await User.findOne({
+    _id: token._userId,
+    email: req.params.email,
+  });
+
+  if (!user) {
+    return next(
+      new AppError(
+        "We were unable to find a user for this verification. Please SignUp!",
+        401
+      )
+    );
+  }
+
+  if (user.isVerified) {
+    return res.status(200).send("User has been already verified. Please Login");
+  }
+
+  user.isVerified = true;
+  await user.save();
+
+  res.status(200).send("Your account has been successfully verified");
+});
+
+export const resendLink = asyncHandler(
+  async (req: Request, res: Response, next: any) => {
+    const { email } = req.body;
+
+    // Check if email is provided
+    if (!email) {
+      return next(new AppError("Email is required", 400));
+    }
+
+    // Find the user by email
+    const user = await User.findOne({ email });
+
+    // If user does not exist, return error
+    if (!user) {
+      return next(new AppError("User not found", 404));
+    }
+
+    // Check if user is already verified
+    if (user.isVerified) {
+      return next(new AppError("User is already verified", 400));
+    }
+
+    try {
+      // Generate a new token
+      const token = new Token({
+        _userId: user._id,
+        token: crypto.randomBytes(16).toString("hex"),
+      });
+      await token.save();
+
+      // Send verification email with new token
+      const verificationText = `Hello ${user.name},\n\nPlease verify your account by clicking the link:\nhttp://${req.headers.host}/api/user/confirmation/${user.email}/${token.token}\n\nThank You!\n`;
+
+      await sendEmail(user.email, "Resend Verification Link", verificationText);
+
+      return res
+        .status(200)
+        .json({ message: "Verification link has been resent" });
+    } catch (error) {
+      console.error("Error sending verification email:", error);
+      return next(new AppError("Internal Server Error", 500));
+    }
+  }
+);
+
+export default { signUp, login, logout, confirmEmail, resendLink };
