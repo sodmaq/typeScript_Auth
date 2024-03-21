@@ -10,7 +10,7 @@ const env = load({
   JWT_SECRET: String,
 });
 
-export const authMiddleware = asyncHandler(
+export const protectMiddleware = asyncHandler(
   async (req: Request, res: Response, next: NextFunction) => {
     let token;
     if (req.headers.authorization?.startsWith("Bearer")) {
@@ -33,4 +33,4 @@ export const authMiddleware = asyncHandler(
     }
   }
 );
-export default {authMiddleware};
+export default {protectMiddleware};

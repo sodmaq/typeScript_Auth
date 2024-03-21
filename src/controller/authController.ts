@@ -293,6 +293,43 @@ export const resetPassword = asyncHandler(
   }
 );
 
+
+export const updatePassword = asyncHandler(async (req: Request, res: Response, next: any) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = (req as any).user.id;
+
+  // Check if the current password and new password fields are empty
+  if (!currentPassword || !newPassword) {
+    return next(new AppError('Current password and new password are required.', 400));
+  }
+
+  try {
+    // Find the user by ID
+    const user = await User.findById(userId).select('+password');
+
+    // If user not found, return an error
+    if (!user) {
+      return next(new AppError('User not found.', 404));
+    }
+
+    // Check if the current password provided matches the user's current password
+    const isPasswordMatched = await (user as any).isPasswordMatched(currentPassword, user.password);
+   
+    if (!isPasswordMatched) {
+      return next(new AppError('Current password is incorrect.', 401));
+    }
+
+    // Update the user's password
+    user.password = newPassword;
+    await user.save();
+
+    res.json(user);
+  } catch (error) {
+    return next(new AppError('Error updating password.', 500));
+  }
+});
+
+
 export default {
   signUp,
   login,
@@ -301,4 +338,5 @@ export default {
   resendLink,
   forgotPassword,
   resetPassword,
+  updatePassword,
 };
